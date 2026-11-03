@@ -1,26 +1,22 @@
 import cv2
-import numpy as np
 import torch
+import numpy as np
 
 def load_image(image_path):
-    """Loads an image, crops it to be compatible with SwinIR window sizes, and returns tensors."""
-    img = cv2.imread(image_path)
+    img = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if img is None:
-        raise FileNotFoundError(f"Image not found at {image_path}. Please provide a valid test image.")
-    
+        raise FileNotFoundError(f"Failed to load image: {image_path}")
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = img.astype(np.float32) / 255.0
     
-    # Crop to a multiple of 8 (SwinIR window size requirement)
     h, w, _ = img.shape
     h, w = h - h % 8, w - w % 8
     img = img[:h, :w, :]
     
-    img_tensor = torch.from_numpy(np.transpose(img, (2, 0, 1))).float().unsqueeze(0)
-    return img_tensor, img
+    img = img.astype(np.float32) / 255.0
+    tensor = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0)
+    return tensor, img
 
-def add_gaussian_noise(image_tensor, noise_level=50):
-    """Adds synthetic Gaussian noise matching the pre-trained model's target."""
-    noise = torch.randn_like(image_tensor) * (noise_level / 255.0)
-    noisy_tensor = image_tensor + noise
-    return torch.clamp(noisy_tensor, 0, 1)
+def add_gaussian_noise(tensor, noise_level=50):
+    noise = torch.randn_like(tensor) * (noise_level / 255.0)
+    noisy_tensor = tensor + noise
+    return torch.clamp(noisy_tensor, 0.0, 1.0)
