@@ -4,14 +4,15 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 
 def generate_summary():
-    output_dir = "./truncation_experiment"
+    output_dir = os.path.abspath("truncation_experiment")
     csv_path = os.path.join(output_dir, "experiment_metrics.csv")
     
     if not os.path.exists(csv_path):
         print(f"Metrics file not found at {csv_path}. Please run main.py first.")
         return
 
-    df = pd.read_csv(csv_path)
+    # FORCE 'Image' column to be read as string so "0000" doesn't become "0"
+    df = pd.read_csv(csv_path, dtype={'Image': str})
 
     # ====================================================
     # 1. Generate PSNR Trend Plot (All 50 Images)
@@ -38,9 +39,15 @@ def generate_summary():
     # 2. Generate Visual Comparison Grid (First 5 Images)
     # ====================================================
     images_to_show = min(5, len(df))
-    # Create a grid: rows = number of images, cols = 4 (the 4 output types)
+    if images_to_show == 0:
+        return
+        
     fig, axes = plt.subplots(images_to_show, 4, figsize=(18, 4.5 * images_to_show))
     
+    # Ensure axes is a 2D array even if there is only 1 image to show
+    if images_to_show == 1:
+        axes = axes.reshape(1, 4)
+        
     cols = ['Standard Denoised\n(180 Channels)', 'Truncated Denoised\n(Top 15 Channels)', 
             'Standard Noise Mask', 'Truncated Noise Mask']
     
@@ -50,6 +57,10 @@ def generate_summary():
         
     for i in range(images_to_show):
         base_name = str(df.iloc[i]['Image'])
+        
+        # Failsafe: if it somehow became "0", force it back to "0000"
+        if len(base_name) < 4 and base_name.isdigit():
+            base_name = base_name.zfill(4)
         
         # Load the 4 generated artifacts for this image
         files = [
@@ -63,6 +74,8 @@ def generate_summary():
             if os.path.exists(f):
                 img = mpimg.imread(f)
                 axes[i, j].imshow(img)
+            else:
+                print(f"Warning: Image not found - {f}")
             axes[i, j].axis('off')
             
     plt.tight_layout()
