@@ -8,6 +8,13 @@ import math
 import numpy as np
 import matplotlib.pyplot as plt
 
+'''
+python main.py --mode swinir --num_images 50 --noise_level 50 --top_k 15 --image_dir ..\CBSD68-dataset\noisy5\train\clean
+python main.py --mode mae --mae_variant base --layer_step 3 --num_images 1 --noise_level 50 --max_visuals 5 --image_dir ..\CBSD68-dataset\noisy5\train\clean
+python main.py --mode mae --mae_variant large --layer_step 3 --num_images 50 --noise_level 50 --max_visuals 5 --image_dir ..\CBSD68-dataset\noisy5\train\clean
+python main.py --mode mae --mae_variant huge --layer_step 3 --num_images 50 --noise_level 50 --max_visuals 5 --image_dir ..\CBSD68-dataset\noisy5\train\clean
+'''
+
 def ensure_swinir():
     swinir_path = os.path.abspath("SwinIR")
     if not os.path.exists(swinir_path):
@@ -15,29 +22,28 @@ def ensure_swinir():
     if swinir_path not in sys.path:
         sys.path.append(swinir_path)
 
-ensure_swinir()
-from model_utils import load_swinir_model
-from dataset import load_image, add_gaussian_noise
-from analyzer import ViTXAIAnalyzer
 
 def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
     return torch.device("cpu")
 
+
 def calculate_psnr(img1, img2):
     mse = torch.mean((img1 - img2) ** 2)
     if mse == 0:
-        return float('inf')
+        return float("inf")
     return 20 * math.log10(1.0 / math.sqrt(mse.item()))
+
 
 def save_image(tensor, path, shift_center=False):
     img = tensor.squeeze().cpu().detach().numpy().transpose(1, 2, 0)
     if shift_center:
-        img = np.clip(img + 0.5, 0, 1) 
+        img = np.clip(img + 0.5, 0, 1)
     else:
         img = np.clip(img, 0, 1)
     plt.imsave(path, img)
+
 
 class LatentSpaceMasker:
     def __init__(self, model, top_k=15):
@@ -52,13 +58,13 @@ class LatentSpaceMasker:
 
     def _mask_hook(self, module, args):
         noisy_features = args[0]
-        mse_per_channel = torch.mean((self.clean_features - noisy_features)**2, dim=[0, 2, 3])
-        top_k_indices = torch.argsort(mse_per_channel, descending=True)[:self.top_k]
-        
+        mse_per_channel = torch.mean((self.clean_features - noisy_features) ** 2, dim=[0, 2, 3])
+        top_k_indices = torch.argsort(mse_per_channel, descending=True)[: self.top_k]
+
         mask = torch.zeros_like(noisy_features)
         mask[:, top_k_indices, :, :] = 1.0
-        
-        return (noisy_features * mask, )
+
+        return (noisy_features * mask,)
 
     def extract_clean_reference(self, clean_tensor):
         self.hook_clean = self.model.conv_after_body.register_forward_pre_hook(self._clean_hook)
@@ -73,15 +79,20 @@ class LatentSpaceMasker:
         self.hook_mask.remove()
         return output
 
-def run_experiment(args):
-    device = get_device()
-    print(f"Running experiment on: {device}")
+
+def run_swinir_experiment(args, device):
+    ensure_swinir()
+    from model_utils import load_swinir_model
+    from dataset import load_image, add_gaussian_noise
+    from analyzer import ViTXAIAnalyzer
+
+    print(f"Running SwinIR experiment on: {device}")
 
     model = load_swinir_model(args.weights_path, target_device=device)
     analyzer = ViTXAIAnalyzer(model)
     masker = LatentSpaceMasker(model, top_k=args.top_k)
 
-    image_paths = glob.glob(os.path.join(args.image_dir, "*.[jp][pn]g"))[:args.num_images]
+    image_paths = glob.glob(os.path.join(args.image_dir, "*.[jp][pn]g"))[: args.num_images]
     if not image_paths:
         print(f"No images found in {args.image_dir}")
         return
@@ -94,35 +105,30 @@ def run_experiment(args):
 
     for idx, img_path in enumerate(image_paths):
         base_name = os.path.splitext(os.path.basename(img_path))[0]
-        print(f"[{idx+1}/{len(image_paths)}] Processing {base_name}...")
+        print(f"[{idx + 1}/{len(image_paths)}] Processing {base_name}...")
 
         clean_tensor, _ = load_image(img_path)
         noisy_tensor = add_gaussian_noise(clean_tensor, noise_level=args.noise_level)
-        
+
         clean_tensor = clean_tensor.to(device)
         noisy_tensor = noisy_tensor.to(device)
 
-        # 1. Standard Forward Pass
         with torch.no_grad():
             out_standard = model(noisy_tensor)
         noise_dump_standard = noisy_tensor - out_standard
 
-        # 1b. XAI Analysis (for charts)
         _, channel_mse, _, _ = analyzer.analyze_drift(clean_tensor, noisy_tensor)
         all_channel_mse.append(channel_mse)
 
-        # 2. Truncated Forward Pass
         masker.extract_clean_reference(clean_tensor)
         out_truncated = masker.forward_with_truncated_dimensions(noisy_tensor)
         noise_dump_truncated = noisy_tensor - out_truncated
 
-        # 3. Calculate Metrics
         psnr_std = calculate_psnr(clean_tensor, out_standard)
         psnr_trunc = calculate_psnr(clean_tensor, out_truncated)
         psnr_diff = calculate_psnr(out_standard, out_truncated)
         csv_file.write(f"{base_name},{psnr_std:.2f},{psnr_trunc:.2f},{psnr_diff:.2f}\n")
 
-        # 4. Save Image Artifacts
         save_image(out_standard, os.path.join(args.output_dir, f"{base_name}_01_denoised_standard.png"))
         save_image(out_truncated, os.path.join(args.output_dir, f"{base_name}_02_denoised_top15.png"))
         save_image(noise_dump_standard, os.path.join(args.output_dir, f"{base_name}_03_dump_standard.png"), shift_center=True)
@@ -130,13 +136,12 @@ def run_experiment(args):
 
     csv_file.close()
 
-    # 5. Generate Global XAI Plots
     if all_channel_mse:
         all_channel_mse = np.array(all_channel_mse)
-        
+
         mean_channel_mse = np.mean(all_channel_mse, axis=0)
         top20 = np.argsort(mean_channel_mse)[::-1][:20]
-        
+
         plt.figure(figsize=(12, 5))
         plt.bar(np.arange(len(top20)), mean_channel_mse[top20])
         plt.xticks(np.arange(len(top20)), top20, rotation=45)
@@ -151,7 +156,7 @@ def run_experiment(args):
         for mse in all_channel_mse:
             for ch in np.argsort(mse)[::-1][:10]:
                 channel_frequency[ch] += 1
-                
+
         plt.figure(figsize=(15, 5))
         plt.bar(np.arange(len(channel_frequency)), channel_frequency)
         plt.title("Frequency of Channel Appearing in Top-10")
@@ -171,16 +176,39 @@ def run_experiment(args):
         plt.savefig(os.path.join(args.output_dir, "channel_heatmap.png"))
         plt.close()
 
-    print(f"\nExperiment complete. Data, images, and XAI charts saved to: {args.output_dir}")
+    print(f"\nSwinIR experiment complete. Data, images, and XAI charts saved to: {args.output_dir}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", type=str, choices=["swinir", "mae"], default="swinir",
+                        help="Select pipeline: 'swinir' (original) or 'mae' (multi-layer embedding drift)")
+
+    # Shared arguments
     parser.add_argument("--image_dir", type=str, default="./test_images")
-    parser.add_argument("--output_dir", type=str, default="./truncation_experiment")
-    parser.add_argument("--weights_path", type=str, default="./model_zoo/005_colorDN_DFWB_s128w8_SwinIR-M_noise50.pth")
+    parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--num_images", type=int, default=50)
     parser.add_argument("--noise_level", type=int, default=50)
+
+    # SwinIR-specific arguments
+    parser.add_argument("--weights_path", type=str, default="./model_zoo/005_colorDN_DFWB_s128w8_SwinIR-M_noise50.pth")
     parser.add_argument("--top_k", type=int, default=15)
-    
+
+    # MAE-specific arguments
+    parser.add_argument("--mae_variant", type=str, choices=["base", "large", "huge"], default="base")
+    parser.add_argument("--mae_weights_path", type=str, default=None, help="Optional local path; auto-downloads if omitted")
+    parser.add_argument("--layer_step", type=int, default=3, help="Sample every Nth encoder layer (e.g., 3 -> 3,6,9,12)")
+    parser.add_argument("--max_visuals", type=int, default=5, help="Max per-image multi-layer visual plots to save")
+
     args = parser.parse_args()
-    run_experiment(args)
+    device = get_device()
+
+    if args.mode == "swinir":
+        if args.output_dir is None:
+            args.output_dir = "./truncation_experiment"
+        run_swinir_experiment(args, device)
+    else:
+        if args.output_dir is None:
+            args.output_dir = f"./mae_experiment_{args.mae_variant}"
+        from mae_experiment import run_mae_experiment
+        run_mae_experiment(args, device)
