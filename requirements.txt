@@ -1,8 +1,8 @@
 torch
 torchvision
-matplotlib
+timm
 numpy
 opencv-python
-requests
-intel-extension-for-pytorch
-timm
+matplotlib
+pandas
+Pillow
